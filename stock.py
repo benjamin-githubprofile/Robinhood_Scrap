@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import matplotlib.pyplot as plt
 import yfinance as yf
+from tools.stock_price_checker import get_stock_price
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -19,7 +20,6 @@ ROBINHOOD_USERNAME = os.getenv("ROBINHOOD_USERNAME")
 ROBINHOOD_PASSWORD = os.getenv("ROBINHOOD_PASSWORD")
 
 def setup_webdriver():
-    """Set up the Selenium WebDriver."""7
     chrome_options = Options()
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
@@ -35,7 +35,6 @@ def setup_webdriver():
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def fetch_industry_data(symbols):
-    """Fetch sector and industry information from yfinance."""
     industry_data = {}
     for symbol in symbols:
         try:
@@ -51,7 +50,6 @@ def fetch_industry_data(symbols):
     return industry_data
 
 def parse_and_analyze_stocks(html_content):
-    """Parse stock information from HTML, calculate percentages, and rebalance."""
     soup = BeautifulSoup(html_content, "html.parser")
 
     stock_rows = soup.find_all("a", class_="css-1byi2su", href=lambda x: x and "/stocks/" in x)
@@ -100,7 +98,6 @@ def parse_and_analyze_stocks(html_content):
     industry_data = fetch_industry_data(symbols)
 
     def map_to_broad_sector(industry):
-        """Map detailed industries to broad sectors."""
         sector_mapping = {
             "Banks - Diversified": "Financial Services",
             "Drug Manufacturers - General": "Healthcare",
@@ -158,8 +155,38 @@ def parse_and_analyze_stocks(html_content):
 
     return df
 
+def get_stock_price_from_driver(driver, ticker):
+    try:
+        driver.get(f"https://robinhood.com/stocks/{ticker.upper()}")
+        time.sleep(2)
+        html_content = driver.page_source
+        return get_stock_price(html_content)
+    except Exception as e:
+        print(f"Error fetching price for {ticker}: {str(e)}")
+        return None
+
+def interactive_price_check(driver):
+    while True:
+        print("\nOptions:")
+        print("1. Enter a ticker symbol to check its real-time price")
+        print("2. Type 'Exit' to quit")
+        
+        user_input = input("\nWhat would you like to do? ").strip().upper()
+        
+        if user_input == 'EXIT':
+            print("Shutting down...")
+            driver.quit()
+            break
+        
+        if user_input:
+            price = get_stock_price_from_driver(driver, user_input)
+            if price:
+                print(f"\nCurrent {user_input} price: ${price:.2f}")
+            else:
+                print(f"Could not fetch price for {user_input}")
+
+
 def login_and_get_html():
-    """Login to Robinhood and get the HTML content of the investing page."""
     driver = setup_webdriver()
     try:
         driver.get("https://robinhood.com/login/")
@@ -172,15 +199,22 @@ def login_and_get_html():
 
         driver.get("https://robinhood.com/account/investing")
         time.sleep(5) 
-
-        html_content = driver.page_source
-        return html_content
-    finally:
+        investing_html = driver.page_source
+        
+        return investing_html, amd_html, driver  
+    except Exception as e:
         driver.quit()
+        raise e
 
 if __name__ == "__main__":
     if not all([CHROMEDRIVER_PATH, ROBINHOOD_USERNAME, ROBINHOOD_PASSWORD]):
         logging.error("Ensure all required environment variables are set.")
     else:
-        html_content = login_and_get_html()
-        parse_and_analyze_stocks(html_content)  
+        try:
+            investing_html, amd_html, driver = login_and_get_html()
+            parse_and_analyze_stocks(investing_html)
+            interactive_price_check(driver)
+        except Exception as e:
+            logging.error(f"An error occurred: {e}")
+            if 'driver' in locals():
+                driver.quit() 
